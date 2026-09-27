@@ -71,12 +71,16 @@ sealed class Probe : IDisposable
         udp?.Dispose();
     }
 
-    /// <summary>DNS A query for cloudflare.com (answer is cached at 1.1.1.1, so RTT ≈ network RTT).</summary>
+    /// <summary>
+    /// DNS query for the root zone's NS records. 1.1.1.1 always has them cached (TTL 6 days), so it answers without
+    /// any lookup of its own: RTT = network RTT. Measured: an A query for cloudflare.com added ~10 ms of resolver
+    /// time to every sample, and a cache miss on it could add ~250 ms that had nothing to do with the connection.
+    /// </summary>
     static byte[] Query(ushort id) =>
     [
         (byte)(id >> 8), (byte)id, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0,
-        10, .."cloudflare"u8, 3, .."com"u8, 0,
-        0, 1, 0, 1,
+        0,          // root name "."
+        0, 2, 0, 1, // type NS, class IN
     ];
 
     public void Dispose() => cts.Cancel();
