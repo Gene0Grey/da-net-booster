@@ -22,6 +22,7 @@ sealed class MainForm : Form
     readonly Tunnel tunnel;
     Probe? probe;
     bool busy;
+    bool refreshing, ticking; // timers fire every 1-3 s; a slow phone must not stack overlapping checks
     string deviceState = "";
     int misses; // consecutive polls without the phone in 'device' state
     string? lastError;
@@ -65,6 +66,7 @@ sealed class MainForm : Form
         updateCheck.Tick += async (_, _) => await CheckForUpdate();
         tunnel.Exited += () => BeginInvoke(async () =>
         {
+            if (busy) return; // mid-connect: Toggle's own error path cleans up; two Disconnects at once would race
             Log("Tunnel process exited unexpectedly.");
             await Task.Run(tunnel.Disconnect);
             SetConnected(false);
@@ -75,7 +77,13 @@ sealed class MainForm : Form
         busyAnim.Tick += (_, _) => { dash.BusyPhase = (dash.BusyPhase + 0.015f) % 1f; dash.Invalidate(); };
         poll.Tick += async (_, _) => await RefreshDevice();
         tick.Tick += async (_, _) => await Tick();
-        Shown += async (_, _) => { poll.Start(); updateCheck.Start(); await RefreshDevice(); await CheckForUpdate(); };
+        Shown += async (_, _) =>
+        {
+            await Task.Run(() => Tunnel.CleanupOrphans(Log));
+            poll.Start(); updateCheck.Start();
+            await RefreshDevice();
+            await CheckForUpdate();
+        };
         FormClosing += (_, _) =>
         {
             poll.Stop(); tick.Stop(); updateCheck.Stop(); probe?.Dispose();
@@ -158,6 +166,7 @@ sealed class MainForm : Form
                 Log("Connecting...");
                 await Task.Run(tunnel.Connect);
                 Log("Connected. All IPv4 traffic now goes through the phone.");
+                autoReconnectUntil = DateTime.MinValue;
                 SetConnected(true);
             }
         }
@@ -193,7 +202,7 @@ sealed class MainForm : Form
             baseBytes = lastBytes = Tunnel.AdapterBytes();
             (dash.Message, dash.MessageColor) = ("Measuring your connection…", Theme.Text2);
             probe = new Probe();
-            probe.Sample += rtt => BeginInvoke(() => OnSample(rtt));
+            probe.Sample += rtt => { if (!IsDisposed && IsHandleCreated) BeginInvoke(() => OnSample(rtt)); };
             tick.Start();
             Chrome(Theme.Accent);
         }
@@ -243,7 +252,8 @@ sealed class MainForm : Form
 
     async Task Tick()
     {
-        if (!tunnel.Running) return;
+        if (!tunnel.Running || ticking) return;
+        ticking = true;
         try
         {
             var (bytes, phone) = await Task.Run(() => (Tunnel.AdapterBytes(), tunnel.ReadPhone()));
@@ -267,11 +277,13 @@ sealed class MainForm : Form
             dash.Invalidate();
         }
         catch (Exception ex) { Log("stats: " + ex.Message); } // a stats hiccup must never take the window down
+        finally { ticking = false; }
     }
 
     async Task RefreshDevice()
     {
-        if (busy) return;
+        if (busy || refreshing) return;
+        refreshing = true;
         try
         {
             if (tunnel.Running)
@@ -288,6 +300,9 @@ sealed class MainForm : Form
                     Log("Phone's USB address changed. Reconnecting.");
                     SetConnected(false);
                     await Task.Run(tunnel.Disconnect);
+                    lastError = "Phone's USB connection changed. Reconnecting…";
+                    autoReconnectUntil = DateTime.Now.AddMinutes(2); // retried by the next polls if this attempt fails
+                    refreshing = false; // Toggle ends with a RefreshDevice of its own
                     await Toggle();
                     return;
                 }
@@ -336,6 +351,7 @@ sealed class MainForm : Form
         {
             Log("device check: " + ex.Message);
         }
+        finally { refreshing = false; }
         dash.Invalidate();
     }
 
@@ -353,7 +369,13 @@ sealed class MainForm : Form
 
     void Log(string s)
     {
-        if (InvokeRequired) { BeginInvoke(() => Log(s)); return; }
+        if (InvokeRequired)
+        {
+            // Tunnel output can arrive while the window is closing; write it to the file and stop there.
+            if (IsDisposed || !IsHandleCreated) { AppLog.Write(s); return; }
+            try { BeginInvoke(() => Log(s)); } catch (InvalidOperationException) { AppLog.Write(s); }
+            return;
+        }
         AppLog.Write(s);
         logBox.AppendText($"[{DateTime.Now:HH:mm:ss}] {s}{Environment.NewLine}");
     }

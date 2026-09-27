@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
@@ -50,8 +51,8 @@ sealed class Tunnel(Action<string> log)
             log($"USB tethering link: phone at {tether.phone} on '{tether.name}'.");
             // IPv6 on the tethering adapter would bypass the tunnel through the phone's NAT: off while connected,
             // restored on disconnect so plain USB tethering behaves normally afterwards.
-            ipv6Restore = Run("powershell", $"-NoProfile -Command \"(Get-NetAdapterBinding -Name '{tether.name}' -ComponentID ms_tcpip6).Enabled\"").output == "True";
-            if (ipv6Restore) Run("powershell", $"-NoProfile -Command \"Disable-NetAdapterBinding -Name '{tether.name}' -ComponentID ms_tcpip6\"");
+            ipv6Restore = Run("powershell", $"-NoProfile -Command \"(Get-NetAdapterBinding -Name '{Ps(tether.name)}' -ComponentID ms_tcpip6).Enabled\"").output == "True";
+            if (ipv6Restore) Run("powershell", $"-NoProfile -Command \"Disable-NetAdapterBinding -Name '{Ps(tether.name)}' -ComponentID ms_tcpip6\"");
         }
         else if (Device() is { state: "device" })
             ConnectAdb();
@@ -105,11 +106,31 @@ sealed class Tunnel(Action<string> log)
             Adb($"shell am stopservice -n {Pkg}/.ProxyService");
         }
         if (ipv6Restore && tetherNic != null)
-            Run("powershell", $"-NoProfile -Command \"Enable-NetAdapterBinding -Name '{tetherNic}' -ComponentID ms_tcpip6 -ErrorAction SilentlyContinue\"");
+            Run("powershell", $"-NoProfile -Command \"Enable-NetAdapterBinding -Name '{Ps(tetherNic)}' -ComponentID ms_tcpip6 -ErrorAction SilentlyContinue\"");
         ipv6Restore = false;
         serial = null;
         Mode = Link.None;
         stopping = false;
+    }
+
+    /// <summary>
+    /// A tunnel left running by a crashed or force-closed older version keeps the PC's traffic pointed at a phone that
+    /// may be gone (no internet at all). Kill ours before anything else; its adapter and routes go with it.
+    /// </summary>
+    public static void CleanupOrphans(Action<string> log)
+    {
+        foreach (var p in Process.GetProcessesByName("hev-socks5-tunnel"))
+        {
+            try
+            {
+                if (!string.Equals(Path.GetDirectoryName(p.MainModule?.FileName), Tools, StringComparison.OrdinalIgnoreCase)) continue;
+                log($"Stopping a tunnel left behind by an earlier session (pid {p.Id}).");
+                p.Kill();
+                p.WaitForExit(3000);
+            }
+            catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException) { }
+            finally { p.Dispose(); }
+        }
     }
 
     /// <summary>For the idle UI: which link is available and its state (ready / noapp / device / unauthorized / offline).</summary>
@@ -176,7 +197,7 @@ sealed class Tunnel(Action<string> log)
                 return (p[0], p[1], model);
             }
         }
-        catch (System.ComponentModel.Win32Exception) { }
+        catch (Exception e) when (e is System.ComponentModel.Win32Exception or FileNotFoundException) { }
         return null;
     }
 
@@ -267,6 +288,7 @@ sealed class Tunnel(Action<string> log)
         p.Exited += (s, _) => { if (!stopping && ReferenceEquals(s, hev)) Exited?.Invoke(); };
         hev = p;
         p.Start();
+        KillWithApp.Add(p); // if this app crashes or is killed, Windows kills the tunnel too (no orphaned routes)
         p.BeginOutputReadLine();
         p.BeginErrorReadLine();
     }
@@ -309,12 +331,18 @@ sealed class Tunnel(Action<string> log)
         if (r.code != 0) throw new InvalidOperationException(r.output);
     }
 
-    /// <summary>Bundled tools\ first, else rely on PATH.</summary>
+    /// <summary>
+    /// Only ever the bundled copy: this app runs as admin, so falling back to whatever adb.exe / tunnel happens to be on
+    /// PATH would run an arbitrary program elevated.
+    /// </summary>
     static string Tool(string exe)
     {
         var p = Path.Combine(Tools, exe);
-        return File.Exists(p) ? p : exe;
+        return File.Exists(p) ? p : throw new FileNotFoundException($"{exe} is missing from the app's tools folder. Reinstall Da Net Booster.");
     }
+
+    /// <summary>Adapter names come from Windows/drivers; escape them for a single-quoted PowerShell string.</summary>
+    static string Ps(string s) => s.Replace("'", "''");
 
     static (int code, string output) Run(string exe, string args)
     {
@@ -328,5 +356,57 @@ sealed class Tunnel(Action<string> log)
         var output = p.StandardOutput.ReadToEnd() + err.Result;
         p.WaitForExit();
         return (p.ExitCode, output.Trim());
+    }
+}
+
+/// <summary>
+/// Windows Job Object with KILL_ON_JOB_CLOSE: processes added here die when this app's process ends for any reason
+/// (normal exit, crash, Task Manager). Otherwise a stranded tunnel keeps all traffic routed to a vanished phone.
+/// </summary>
+static class KillWithApp
+{
+    const int JobObjectExtendedLimitInformation = 9;
+    const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000;
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct BasicLimits
+    {
+        public long PerProcessUserTimeLimit, PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize, MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass, SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct IoCounters { public ulong R, W, O, RB, WB, OB; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct ExtendedLimits
+    {
+        public BasicLimits Basic;
+        public IoCounters Io;
+        public UIntPtr ProcessMemoryLimit, JobMemoryLimit, PeakProcessMemoryUsed, PeakJobMemoryUsed;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr CreateJobObject(IntPtr attrs, string? name);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool SetInformationJobObject(IntPtr job, int cls, ref ExtendedLimits info, int size);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+    // Held for the life of the process; the OS closes it on exit, which kills everything in the job.
+    static readonly IntPtr Job = Create();
+
+    static IntPtr Create()
+    {
+        var job = CreateJobObject(IntPtr.Zero, null);
+        var info = new ExtendedLimits { Basic = { LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE } };
+        SetInformationJobObject(job, JobObjectExtendedLimitInformation, ref info, Marshal.SizeOf<ExtendedLimits>());
+        return job;
+    }
+
+    public static void Add(Process p)
+    {
+        if (Job != IntPtr.Zero) AssignProcessToJobObject(Job, p.Handle);
     }
 }

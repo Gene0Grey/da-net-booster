@@ -28,10 +28,24 @@ sealed class Probe : IDisposable
             if (udp == null || lostRun >= 6)
             {
                 udp?.Dispose();
-                udp = new UdpClient();
-                udp.Client.ReceiveTimeout = 1000;
-                udp.Connect(Target, 53);
-                lostRun = 0;
+                udp = null;
+                try
+                {
+                    udp = new UdpClient();
+                    udp.Client.ReceiveTimeout = 1000;
+                    udp.Connect(Target, 53); // throws when there is no route at all (cable pulled, no Wi-Fi)
+                    lostRun = 0;
+                }
+                catch (SocketException)
+                {
+                    // Was outside any try: an unhandled exception on this thread killed the whole app.
+                    udp?.Dispose();
+                    udp = null;
+                    if (cts.IsCancellationRequested) break;
+                    Sample?.Invoke(null);
+                    cts.Token.WaitHandle.WaitOne(500);
+                    continue;
+                }
             }
             id++;
             var sw = Stopwatch.StartNew();
@@ -50,7 +64,7 @@ sealed class Probe : IDisposable
             catch (SocketException) { }
             lostRun = rtt == null ? lostRun + 1 : 0;
             if (cts.IsCancellationRequested) break;
-            Sample?.Invoke(rtt);
+            try { Sample?.Invoke(rtt); } catch (Exception) { break; } // the window is gone: stop quietly
             var wait = 500 - (int)sw.ElapsedMilliseconds;
             if (wait > 0) cts.Token.WaitHandle.WaitOne(wait);
         }
