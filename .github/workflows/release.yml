@@ -1,0 +1,64 @@
+# Push a tag like v1.4.0 -> builds + signs the phone APK, builds the desktop app, publishes a GitHub Release with
+# Setup.exe (Velopack installer + update feed) and DaNetBooster.apk. Installed apps pick the update up from there.
+name: Release
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version from tag
+        shell: pwsh
+        run: '"VERSION=$(''${{ github.ref_name }}''.TrimStart(''v''))" >> $env:GITHUB_ENV'
+
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: 8.0.x }
+
+      - name: Release signing key
+        shell: pwsh
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if (-not $env:KEYSTORE_B64) { throw "Missing ANDROID_KEYSTORE_BASE64 secret. Every release must be signed with the same key or phones refuse the update." }
+          $ks = Join-Path $env:RUNNER_TEMP 'release.jks'
+          [IO.File]::WriteAllBytes($ks, [Convert]::FromBase64String($env:KEYSTORE_B64))
+          "ANDROID_KEYSTORE=$ks" >> $env:GITHUB_ENV
+
+      - name: Test and build phone app
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew.bat test assembleRelease "-PappVersion=$env:VERSION" "-PupdateRepo=${{ github.repository }}"
+
+      - name: Bundle tools and phone app
+        shell: pwsh
+        run: |
+          ./scripts/fetch-tools.ps1 -Apk android/app/build/outputs/apk/release/app-release.apk
+          Copy-Item android/app/build/outputs/apk/release/app-release.apk DaNetBooster.apk
+
+      - name: Publish desktop app
+        run: dotnet publish desktop/DaNetBooster -c Release -r win-x64 --self-contained false -o publish "-p:Version=$env:VERSION" "-p:UpdateRepo=https://github.com/${{ github.repository }}"
+
+      - name: Package and release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          dotnet tool install -g vpk --version 1.2.158
+          $repo = "https://github.com/${{ github.repository }}"
+          vpk download github --repoUrl $repo --token $env:GH_TOKEN
+          vpk pack -u DaNetBooster -v $env:VERSION -p publish -e DaNetBooster.exe --packTitle "Da Net Booster" --framework net8.0-x64-desktop
+          vpk upload github --repoUrl $repo --token $env:GH_TOKEN --publish --releaseName "Da Net Booster $env:VERSION" --tag "${{ github.ref_name }}"
+          gh release upload "${{ github.ref_name }}" DaNetBooster.apk --clobber

@@ -1,0 +1,26 @@
+# build output
+bin/
+obj/
+build/
+.gradle/
+desktop/dist/
+desktop/dist-next/
+publish/
+Releases/
+
+# machine-specific
+android/local.properties
+.idea/
+*.iml
+.vs/
+
+# downloaded by scripts/fetch-tools.ps1 (adb, hev-socks5-tunnel, wintun) and the built APK
+desktop/DaNetBooster/tools/
+
+# signing keys: never commit (they live in GitHub secrets)
+*.jks
+*.keystore
+
+# local agent tooling
+.claude-flow/
+.swarm/
