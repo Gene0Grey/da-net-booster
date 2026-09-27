@@ -24,6 +24,7 @@
 
   <ItemGroup>
     <PackageReference Include="QRCoder" Version="1.8.0" />
+    <PackageReference Include="System.ServiceProcess.ServiceController" Version="8.0.1" />
     <PackageReference Include="Velopack" Version="1.2.158" />
   </ItemGroup>
 

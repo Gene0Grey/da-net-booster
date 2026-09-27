@@ -138,6 +138,28 @@ sealed class MainForm : Form
         updater.ApplyAndRestart();
     }
 
+    /// <summary>
+    /// The app runs without admin; a small helper service does the admin work. Install it the first time (and update it
+    /// when the app has moved to a newer version), with one Windows permission prompt each time.
+    /// </summary>
+    async Task<bool> EnsureHelper()
+    {
+        var version = await Task.Run(Helper.Version);
+        if (version == Updater.Version) return true;
+        var first = version == null;
+        var text = first
+            ? "Da Net Booster uses a small helper to create its network adapter, so the app itself never needs admin.\n\nWindows will ask for permission once to install it."
+            : $"The helper needs updating to {Updater.Version} (installed: {version}).\n\nWindows will ask for permission once.";
+        if (MessageBox.Show(this, text, first ? "One-time setup" : "Update the helper", MessageBoxButtons.OKCancel,
+                MessageBoxIcon.Information) != DialogResult.OK)
+            return false;
+        Log(first ? "Installing the helper..." : "Updating the helper...");
+        var ok = await Task.Run(() => Helper.RunElevated("--install-service", TimeSpan.FromMinutes(2)));
+        version = await Task.Run(Helper.Version);
+        Log(ok && version != null ? $"Helper {version} ready." : "Helper install failed or was cancelled.");
+        return ok && version != null;
+    }
+
     async Task Toggle()
     {
         if (busy) return;
@@ -164,6 +186,8 @@ sealed class MainForm : Form
                 if (SystemInformation.UIEffectsEnabled) busyAnim.Start();
                 dash.Invalidate();
                 Log("Connecting...");
+                if (!Tunnel.Elevated && !await EnsureHelper())
+                    throw new InvalidOperationException("Can't connect without the helper. Press Connect to try again");
                 await Task.Run(tunnel.Connect);
                 Log("Connected. All IPv4 traffic now goes through the phone.");
                 autoReconnectUntil = DateTime.MinValue;
@@ -290,6 +314,15 @@ sealed class MainForm : Form
             {
                 var health = await Task.Run(tunnel.Check);
                 if (!tunnel.Running) return; // disconnected while we were checking
+                if (health == Tunnel.Health.Down)
+                {
+                    Log("The tunnel stopped (helper reports it down). Reconnecting.");
+                    SetConnected(false);
+                    await Task.Run(tunnel.Disconnect);
+                    lastError = "The tunnel stopped unexpectedly. Reconnecting…";
+                    autoReconnectUntil = DateTime.Now.AddMinutes(2);
+                    return;
+                }
                 misses = health == Tunnel.Health.Gone ? misses + 1 : 0;
                 notSharing = health == Tunnel.Health.NotSharing ? notSharing + 1 : 0;
                 // The tunnel recovers by itself once the phone app answers again; meanwhile say what's wrong.

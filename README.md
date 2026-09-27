@@ -76,7 +76,7 @@ The late-night spikes appeared on *both* sides at once. That is tower congestion
 ## Get started
 
 1. **PC:** download and run [`DaNetBooster-win-Setup.exe`](https://github.com/Gene0Grey/da-net-booster/releases/latest/download/DaNetBooster-win-Setup.exe). It installs the app, a desktop shortcut and .NET if needed.
-   <sub>Windows may say "Windows protected your PC": click **More info → Run anyway** (the app isn't code-signed yet). It asks for admin rights because it creates a network adapter.</sub>
+   <sub>Windows may say "Windows protected your PC": click **More info → Run anyway** (the app isn't code-signed yet). The first time you press Connect, Windows asks **once** to install a small helper service that creates the network adapter; after that the app runs without admin rights.</sub>
 2. **Phone:** in the PC app click **Get phone app** and scan the QR code, or download the [APK](https://github.com/Gene0Grey/da-net-booster/releases/latest/download/DaNetBooster.apk) directly. Allow the install when Android asks.
 3. Plug the phone in with USB and turn on **USB tethering**. The phone app has a **Turn on** button that takes you there.
 4. Tap **Start sharing** on the phone, then **Connect** on the PC. Done.
@@ -95,6 +95,7 @@ The late-night spikes appeared on *both* sides at once. That is tower congestion
 - 🔌 **All traffic, not just the browser**: TCP and UDP, so games, Discord voice and DNS go through too.
 - 🛡️ **Match-safe**: disconnect asks first, and updates only install when you're disconnected or closing the app.
 - 🔄 **Automatic updates** for both apps from GitHub Releases.
+- 🛡️ **No admin app**: the window runs as a normal user. A tiny helper service in Program Files does only the admin work (network adapter and routes), and it will only ever tunnel to the phone it sees on USB tethering.
 - 🔒 **Private**: the phone only accepts connections from the PC on the USB link, never from Wi-Fi or the mobile network. No accounts, no telemetry (the only outside request is the update check to GitHub).
 
 ## FAQ
