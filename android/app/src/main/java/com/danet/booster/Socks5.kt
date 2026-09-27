@@ -11,7 +11,10 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.UnknownHostException
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -26,30 +29,47 @@ class Socks5(
     private val port: Int,
     private val bind: InetAddress = InetAddress.getLoopbackAddress(),
     private val allow: (InetAddress) -> Boolean = { true },
+    /** A half-closed TCP flow whose other direction moves no bytes for this long is closed (else it leaks forever). */
+    private val halfCloseIdleMs: Long = 60_000,
 ) {
     private val pool = Executors.newCachedThreadPool()
+    private val open: MutableSet<Socket> = ConcurrentHashMap.newKeySet()
     private var server: ServerSocket? = null
     val localPort get() = server?.localPort ?: -1
 
     fun start() {
-        val s = ServerSocket(port, 128, bind)
+        val s = ServerSocket().apply { reuseAddress = true; bind(InetSocketAddress(bind, port), 128) }
         server = s
         pool.execute {
             while (!s.isClosed) {
-                val c = try { s.accept() } catch (e: IOException) { break }
-                if (!allow(c.inetAddress)) { runCatching { c.close() }; continue }
+                // A failed accept (client reset mid-handshake, fd pressure...) must never end the loop: that left the
+                // service "sharing" while refusing every new connection until the user restarted it on the phone.
+                val c = try { s.accept() } catch (e: IOException) {
+                    if (s.isClosed) break
+                    Thread.sleep(50)
+                    continue
+                }
+                if (!runCatching { allow(c.inetAddress) }.getOrDefault(false)) { runCatching { c.close() }; continue }
                 pool.execute { runCatching { handle(c) } }
             }
         }
     }
 
+    /** Stops listening and closes every live flow, so "Stop sharing" really stops and nothing lingers into a restart. */
     fun stop() {
         runCatching { server?.close() }
+        open.forEach { runCatching { it.close() } }
         pool.shutdownNow()
     }
 
     private fun handle(c: Socket): Unit = c.use {
+        open += c
+        try { serve(c) } finally { open -= c }
+    }
+
+    private fun serve(c: Socket) {
         c.tcpNoDelay = true
+        c.soTimeout = 15_000 // a client that connects and never finishes the handshake must not hold a thread forever
         val inp = DataInputStream(c.getInputStream().buffered())
         val out = c.getOutputStream()
 
@@ -62,6 +82,7 @@ class Socks5(
         val cmd = inp.readUnsignedByte()
         inp.readUnsignedByte() // RSV
         val dst = readAddr(inp)
+        c.soTimeout = 0
         when (cmd) {
             1 -> connect(c, inp, out, dst)
             5 -> udpInTcp(c, inp, out)
@@ -78,17 +99,29 @@ class Socks5(
         } catch (e: IOException) {
             remote.close(); reply(out, 5); return // connection refused
         }
+        open += remote
         remote.use {
             remote.tcpNoDelay = true
             reply(out, 0)
             Stats.tcp.incrementAndGet()
             try {
-                val down = pool.submit { pipe(remote.getInputStream(), out, Stats.down); runCatching { c.shutdownOutput() } }
-                pipe(inp, remote.getOutputStream(), Stats.up)
+                val upBytes = AtomicLong()
+                val downBytes = AtomicLong()
+                val upDone = CountDownLatch(1)
+                val down = pool.submit {
+                    pipe(remote.getInputStream(), out, Stats.down, downBytes)
+                    runCatching { c.shutdownOutput() }
+                    // Server finished first: if the client then goes silent, close it to unblock the reader below.
+                    if (!whileBusy(upBytes) { upDone.await(halfCloseIdleMs, TimeUnit.MILLISECONDS) }) runCatching { c.close() }
+                }
+                pipe(inp, remote.getOutputStream(), Stats.up, upBytes)
+                upDone.countDown()
                 runCatching { remote.shutdownOutput() }
-                runCatching { down.get() }
+                // Client finished first: keep receiving while the server is still sending; give up once it goes silent.
+                whileBusy(downBytes) { runCatching { down.get(halfCloseIdleMs, TimeUnit.MILLISECONDS) }.isSuccess }
             } finally {
                 Stats.tcp.decrementAndGet()
+                open -= remote
             }
         }
     }
@@ -150,13 +183,25 @@ class Socks5(
         private fun reply(out: OutputStream, code: Int) =
             out.write(byteArrayOf(5, code.toByte(), 0, 1, 0, 0, 0, 0, 0, 0))
 
-        private fun pipe(i: InputStream, o: OutputStream, count: AtomicLong) = runCatching {
+        private fun pipe(i: InputStream, o: OutputStream, total: AtomicLong, flow: AtomicLong) = runCatching {
             val buf = ByteArray(65536)
             while (true) {
                 val n = i.read(buf)
                 if (n < 0) break
                 o.write(buf, 0, n)
-                count.addAndGet(n.toLong())
+                total.addAndGet(n.toLong())
+                flow.addAndGet(n.toLong())
+            }
+        }
+
+        /** Repeats [waitSlice] while [bytes] keeps moving. True once it succeeds; false after a slice with no progress. */
+        private inline fun whileBusy(bytes: AtomicLong, waitSlice: () -> Boolean): Boolean {
+            var seen = bytes.get()
+            while (true) {
+                if (waitSlice()) return true
+                val now = bytes.get()
+                if (now == seen) return false
+                seen = now
             }
         }
 

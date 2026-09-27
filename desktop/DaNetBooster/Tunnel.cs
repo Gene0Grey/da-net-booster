@@ -32,6 +32,7 @@ sealed class Tunnel(Action<string> log)
     string socksHost = "", statsHost = "";
     int socksPort, statsPort;
     volatile bool stopping;
+    bool ipv6Restore;
 
     /// <summary>Raised when hev dies on its own (not via Disconnect).</summary>
     public event Action? Exited;
@@ -47,8 +48,10 @@ sealed class Tunnel(Action<string> log)
             tetherNic = tether.name;
             (socksHost, socksPort, statsHost, statsPort) = (tether.phone, PhonePort, tether.phone, PhoneStatsPort);
             log($"USB tethering link: phone at {tether.phone} on '{tether.name}'.");
-            // IPv6 on the tethering adapter would bypass the tunnel through the phone's NAT: keep it off.
-            Run("powershell", $"-NoProfile -Command \"Disable-NetAdapterBinding -Name '{tether.name}' -ComponentID ms_tcpip6 -ErrorAction SilentlyContinue\"");
+            // IPv6 on the tethering adapter would bypass the tunnel through the phone's NAT: off while connected,
+            // restored on disconnect so plain USB tethering behaves normally afterwards.
+            ipv6Restore = Run("powershell", $"-NoProfile -Command \"(Get-NetAdapterBinding -Name '{tether.name}' -ComponentID ms_tcpip6).Enabled\"").output == "True";
+            if (ipv6Restore) Run("powershell", $"-NoProfile -Command \"Disable-NetAdapterBinding -Name '{tether.name}' -ComponentID ms_tcpip6\"");
         }
         else if (Device() is { state: "device" })
             ConnectAdb();
@@ -101,6 +104,9 @@ sealed class Tunnel(Action<string> log)
             Adb($"forward --remove tcp:{AdbStatsPort}");
             Adb($"shell am stopservice -n {Pkg}/.ProxyService");
         }
+        if (ipv6Restore && tetherNic != null)
+            Run("powershell", $"-NoProfile -Command \"Enable-NetAdapterBinding -Name '{tetherNic}' -ComponentID ms_tcpip6 -ErrorAction SilentlyContinue\"");
+        ipv6Restore = false;
         serial = null;
         Mode = Link.None;
         stopping = false;
@@ -114,12 +120,17 @@ sealed class Tunnel(Action<string> log)
         return (Link.None, "", "");
     }
 
-    /// <summary>While connected: is the link we are using still there?</summary>
-    public bool StillAttached() => Mode switch
+    public enum Health { Ok, Gone, Moved, NotSharing }
+
+    /// <summary>While connected: is the link still there, at the same phone address, with the phone app answering?</summary>
+    public Health Check() => Mode switch
     {
-        Link.Tether => FindTether() is { } t && t.name == tetherNic,
-        Link.Adb => Device() is { state: "device" },
-        _ => false,
+        Link.Tether => FindTether() is not { } t || t.name != tetherNic ? Health.Gone
+            : t.phone != socksHost ? Health.Moved
+            : Greet(socksHost, socksPort) ? Health.Ok : Health.NotSharing,
+        Link.Adb => Device() is not { state: "device" } ? Health.Gone
+            : Greet(socksHost, socksPort) ? Health.Ok : Health.NotSharing,
+        _ => Health.Gone,
     };
 
     /// <summary>Android's USB-tethering adapter (RNDIS or NCM) and the phone's address on it (its DHCP gateway).</summary>
@@ -216,7 +227,10 @@ sealed class Tunnel(Action<string> log)
         }
         log(m.Success ? "Updating phone app..." : "Installing phone app...");
         var r = Adb($"install -r \"{apk}\"");
-        if (!r.Contains("Success")) throw new InvalidOperationException("APK install failed: " + r);
+        if (r.Contains("Success")) return;
+        // e.g. a differently-signed build is installed: the existing app still works, so don't block connecting.
+        if (m.Success) { log("Couldn't update the phone app (continuing with the installed one): " + r); return; }
+        throw new InvalidOperationException("APK install failed: " + r);
     }
 
     void StartHev()

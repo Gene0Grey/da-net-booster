@@ -35,8 +35,9 @@ class ProxyService : Service() {
 
         if (proxy == null) {
             Stats.reset()
-            proxy = Socks5(PORT, ANY_V4, Tether::allowed).also { it.start() }
-            startStatsServer()
+            // Right after a stop the old listener can still hold the port for a moment; a crash here killed the app.
+            proxy = retry { Socks5(PORT, ANY_V4, Tether::allowed).also { it.start() } } ?: run { stopSelf(); return START_NOT_STICKY }
+            retry { startStatsServer() }
             wake = (getSystemService(POWER_SERVICE) as PowerManager)
                 .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "danet:proxy").apply { acquire() }
             running = true
@@ -55,16 +56,27 @@ class ProxyService : Service() {
 
     /** Answers every connection with one JSON line of Radio.json(), then closes. */
     private fun startStatsServer() {
-        val s = ServerSocket(STATS_PORT, 8, ANY_V4)
+        val s = ServerSocket().apply { reuseAddress = true; bind(java.net.InetSocketAddress(ANY_V4, STATS_PORT), 8) }
         statsServer = s
         thread(isDaemon = true, name = "stats") {
             while (!s.isClosed) {
-                val c = try { s.accept() } catch (e: Exception) { break }
-                if (!Tether.allowed(c.inetAddress)) { runCatching { c.close() }; continue }
+                val c = try { s.accept() } catch (e: Exception) {
+                    if (s.isClosed) break
+                    Thread.sleep(50)
+                    continue // one failed accept must not stop the stats feed for the rest of the session
+                }
+                if (!runCatching { Tether.allowed(c.inetAddress) }.getOrDefault(false)) { runCatching { c.close() }; continue }
                 Stats.lastPoll = System.currentTimeMillis()
                 runCatching { c.use { it.getOutputStream().write((Radio.json(this@ProxyService) + "\n").toByteArray()) } }
             }
         }
+    }
+
+    private fun <T> retry(block: () -> T): T? {
+        repeat(5) { attempt ->
+            try { return block() } catch (e: java.io.IOException) { if (attempt < 4) Thread.sleep(300) }
+        }
+        return null
     }
 
     private fun notification(): Notification {

@@ -88,3 +88,44 @@ class UpdatesTest {
         assertEquals(false, Updates.newer("1.2.9", "1.3"))
     }
 }
+
+class Socks5ResilienceTest {
+    private val lo = InetAddress.getLoopbackAddress()
+
+    private fun greetAndConnect(port: Int, target: Int): Pair<DataInputStream, Socket> {
+        val s = Socket(lo, port).apply { soTimeout = 5000 }
+        val inp = DataInputStream(s.getInputStream())
+        s.getOutputStream().write(byteArrayOf(5, 1, 0))
+        inp.readFully(ByteArray(2))
+        s.getOutputStream().write(byteArrayOf(5, 1, 0, 1) + lo.address + byteArrayOf((target shr 8).toByte(), target.toByte()))
+        assertEquals(0, ByteArray(10).also(inp::readFully)[1].toInt())
+        return inp to s
+    }
+
+    /** Regression: one bad connection used to be able to end the accept loop, leaving the proxy deaf until restarted. */
+    @Test fun listenerSurvivesAFailingConnection() {
+        var calls = 0
+        val proxy = Socks5(0, allow = { if (calls++ == 0) throw IllegalStateException("boom") else true }).also { it.start() }
+        val echo = ServerSocket(0, 5, lo)
+        thread { echo.accept().use { c -> c.getOutputStream().write(c.getInputStream().readNBytes(2)) } }
+        runCatching { Socket(lo, proxy.localPort).use { it.soTimeout = 2000; it.getInputStream().read() } } // rejected
+        val (inp, s) = greetAndConnect(proxy.localPort, echo.localPort)
+        s.getOutputStream().write("ok".toByteArray())
+        assertEquals("ok", String(ByteArray(2).also(inp::readFully)))
+        s.close(); echo.close(); proxy.stop()
+    }
+
+    /** Regression: a flow whose server never closes after the client half-closes used to leak two sockets and a thread forever. */
+    @Test fun halfOpenFlowIsReaped() {
+        val proxy = Socks5(0, halfCloseIdleMs = 300).also { it.start() }
+        val silent = ServerSocket(0, 5, lo)
+        val held = java.util.concurrent.LinkedBlockingQueue<Socket>()
+        thread { held.put(silent.accept()) } // accepts and then never sends or closes
+        val (inp, s) = greetAndConnect(proxy.localPort, silent.localPort)
+        s.shutdownOutput() // client is done sending
+        val t0 = System.currentTimeMillis()
+        assertEquals(-1, inp.read()) // proxy must close its side instead of waiting forever
+        assert(System.currentTimeMillis() - t0 < 4000)
+        s.close(); held.poll()?.close(); silent.close(); proxy.stop()
+    }
+}

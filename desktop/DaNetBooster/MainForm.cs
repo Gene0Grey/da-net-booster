@@ -25,6 +25,9 @@ sealed class MainForm : Form
     string deviceState = "";
     int misses; // consecutive polls without the phone in 'device' state
     string? lastError;
+    string? phoneWarning;        // shown instead of the verdict while the phone app isn't answering
+    int notSharing;              // consecutive polls where the phone app didn't answer
+    DateTime autoReconnectUntil; // after an unplanned drop, reconnect by itself when the phone is back
     DateTime since;
     (long rx, long tx)? baseBytes, lastBytes;
     Color chrome = Color.Empty;
@@ -65,7 +68,8 @@ sealed class MainForm : Form
             Log("Tunnel process exited unexpectedly.");
             await Task.Run(tunnel.Disconnect);
             SetConnected(false);
-            lastError = "The tunnel stopped unexpectedly. Press Connect to retry";
+            lastError = "The tunnel stopped unexpectedly. Reconnecting…";
+            autoReconnectUntil = DateTime.Now.AddMinutes(2);
             await RefreshDevice();
         });
         busyAnim.Tick += (_, _) => { dash.BusyPhase = (dash.BusyPhase + 0.015f) % 1f; dash.Invalidate(); };
@@ -138,6 +142,7 @@ sealed class MainForm : Form
                 if (MessageBox.Show(this, "Games and downloads using this connection will drop.", "Disconnect from phone?",
                         MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
                     return;
+                autoReconnectUntil = DateTime.MinValue; // you asked for it: don't come back by itself
                 SetConnected(false);
                 await Task.Run(tunnel.Disconnect);
                 Log("Disconnected.");
@@ -225,6 +230,7 @@ sealed class MainForm : Form
     /// <summary>Plain-language read of the last minute for competitive play, naming the worst offender.</summary>
     (string, Color) Verdict()
     {
+        if (phoneWarning != null) return (phoneWarning, Theme.Bad);
         if (window.Count < 10 || dash.Ping is not { } ping) return ("Measuring your connection…", Theme.Text2);
         double loss = dash.Loss ?? 0, jit = dash.Jitter ?? 0;
         var worst = loss > 0.5 ? $"loss {loss:0.#}% in the last minute"
@@ -270,22 +276,34 @@ sealed class MainForm : Form
         {
             if (tunnel.Running)
             {
-                // Debounce: a link can blip for one poll when busy. Only give up after ~9 s of absence.
-                misses = await Task.Run(tunnel.StillAttached) ? 0 : misses + 1;
-                if (misses >= 3)
+                var health = await Task.Run(tunnel.Check);
+                if (!tunnel.Running) return; // disconnected while we were checking
+                misses = health == Tunnel.Health.Gone ? misses + 1 : 0;
+                notSharing = health == Tunnel.Health.NotSharing ? notSharing + 1 : 0;
+                // The tunnel recovers by itself once the phone app answers again; meanwhile say what's wrong.
+                phoneWarning = notSharing >= 3 ? "Phone app isn't answering. Open it and tap Start sharing" : null;
+                if (health == Tunnel.Health.Moved)
                 {
-                    Log("Phone disconnected.");
+                    // Re-plugging the cable gives the phone a new address; the old tunnel would be connected to nothing.
+                    Log("Phone's USB address changed. Reconnecting.");
                     SetConnected(false);
                     await Task.Run(tunnel.Disconnect);
-                    lastError = "Phone disconnected. Check the USB cable";
+                    await Toggle();
+                    return;
                 }
-                else return;
+                if (misses < 3) return; // debounce: a link can blip for one poll when busy; give up after ~9 s
+                Log("Phone disconnected.");
+                SetConnected(false);
+                await Task.Run(tunnel.Disconnect);
+                lastError = "Phone disconnected. Reconnecting when it's back…";
+                autoReconnectUntil = DateTime.Now.AddMinutes(2);
             }
-            misses = 0;
+            misses = notSharing = 0;
+            phoneWarning = null;
 
             var (link, name, state) = await Task.Run(Tunnel.Detect);
             var key = $"{link}:{state}";
-            if (key != deviceState) lastError = null; // a plug/unplug supersedes the old error
+            if (key != deviceState && DateTime.Now >= autoReconnectUntil) lastError = null; // a plug/unplug supersedes the old error
             deviceState = key;
 
             (dash.DeviceLine, dash.DeviceColor) = (link, state) switch
@@ -306,6 +324,13 @@ sealed class MainForm : Form
                 _ => "Plug in your phone and turn on USB tethering",
             }, Theme.Text2);
             connect.Enabled = state is "ready" or "device";
+
+            if (connect.Enabled && DateTime.Now < autoReconnectUntil)
+            {
+                Log("Phone is back. Reconnecting automatically.");
+                autoReconnectUntil = DateTime.MinValue;
+                await Toggle();
+            }
         }
         catch (Exception ex)
         {

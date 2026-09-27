@@ -8,6 +8,7 @@
   <img alt="Windows 10/11" src="https://img.shields.io/badge/PC-Windows%2010%20%7C%2011-4DA3FF?style=flat-square">
   <img alt="Android 8+" src="https://img.shields.io/badge/phone-Android%208%2B-3DDC97?style=flat-square">
   <img alt="No root" src="https://img.shields.io/badge/root-not%20needed-8A93A6?style=flat-square">
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-8A93A6?style=flat-square"></a>
 </p>
 
 <h3 align="center">
@@ -125,7 +126,7 @@ The phone opens every connection itself, so the traffic looks like the phone's o
 - **PC app:** `desktop/DaNetBooster/` (.NET 8 WinForms). Run `scripts/fetch-tools.ps1` once to download adb and hev-socks5-tunnel, then `dotnet build`.
 - **Releases:** push a tag like `v1.4.0`. [`.github/workflows/release.yml`](.github/workflows/release.yml) tests and builds both apps, signs the APK and publishes the installer and APK to GitHub Releases, and installed apps pick up the update from there.
 
-Built on [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel), [Wintun](https://www.wintun.net/), [Velopack](https://velopack.io/) and [QRCoder](https://github.com/codebude/QRCoder).
+Licensed under the [MIT License](LICENSE). Built on [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel), [Wintun](https://www.wintun.net/), [Velopack](https://velopack.io/) and [QRCoder](https://github.com/codebude/QRCoder).
 </details>
 
 ---
