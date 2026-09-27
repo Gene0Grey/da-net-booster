@@ -102,7 +102,9 @@ sealed class MainForm : Form
 
     async Task CheckForUpdate()
     {
-        await updater.CheckAsync();
+        // Updates are optional: even a missing/broken Velopack.dll (throws before CheckAsync's own try) must only be logged.
+        try { await updater.CheckAsync(); }
+        catch (Exception e) { Log("Update check unavailable: " + e.Message); return; }
         if (updater.Ready is not { } v) return;
         update.Text = update.AccessibleName = $"Restart to update to {v}";
         update.Visible = true;

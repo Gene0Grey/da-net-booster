@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" role="img" aria-label="Da Net Booster: share your phone's mobile data with your PC over USB, built for low-ping gaming">
+  <defs>
+    <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4DA3FF" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#4DA3FF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="400" rx="24" fill="#0B0E14"/>
+
+  <g transform="translate(910,0) scale(0.5345,1) translate(-640,0)">
+  <!-- quality bands, as in the app's ping graph -->
+  <rect x="640" y="150" width="580" height="60" fill="#FFB547" fill-opacity="0.05"/>
+  <rect x="640" y="90" width="580" height="60" fill="#FF5C6C" fill-opacity="0.04"/>
+  <!-- a calm, low-jitter ping trace -->
+  <path d="M640 262 L665 258 L690 264 L715 255 L740 261 L765 257 L790 263 L815 254 L840 260 L865 256 L890 262 L915 258 L940 251 L965 259 L990 255 L1015 261 L1040 257 L1065 263 L1090 256 L1115 260 L1140 254 L1165 259 L1190 256 L1220 258 L1220 330 L640 330 Z" fill="url(#fade)"/>
+  <path d="M640 262 L665 258 L690 264 L715 255 L740 261 L765 257 L790 263 L815 254 L840 260 L865 256 L890 262 L915 258 L940 251 L965 259 L990 255 L1015 261 L1040 257 L1065 263 L1090 256 L1115 260 L1140 254 L1165 259 L1190 256 L1220 258" fill="none" stroke="#4DA3FF" stroke-width="3" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+  <line x1="640" y1="330" x2="1220" y2="330" stroke="#232A38" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  </g>
+
+  <!-- live readout -->
+  <text x="1220" y="118" text-anchor="end" font-family="Segoe UI, Inter, Helvetica, Arial, sans-serif" font-size="20" font-weight="600" fill="#8A93A6" letter-spacing="1">PING</text>
+  <text x="1220" y="184" text-anchor="end" font-family="Segoe UI, Inter, Helvetica, Arial, sans-serif" font-size="64" font-weight="600" fill="#3DDC97">27<tspan font-size="26" fill="#8A93A6"> ms</tspan></text>
+
+  <!-- power glyph -->
+  <circle cx="132" cy="200" r="62" fill="#131821" stroke="#3DDC97" stroke-width="9"/>
+  <path d="M147 175 A30 30 0 1 1 117 175" fill="none" stroke="#3DDC97" stroke-width="8" stroke-linecap="round"/>
+  <line x1="132" y1="160" x2="132" y2="196" stroke="#3DDC97" stroke-width="8" stroke-linecap="round"/>
+
+  <text x="232" y="190" font-family="Segoe UI, Inter, Helvetica, Arial, sans-serif" font-size="58" font-weight="700" fill="#E6EAF2">Da Net Booster</text>
+  <text x="234" y="236" font-family="Segoe UI, Inter, Helvetica, Arial, sans-serif" font-size="24" fill="#8A93A6">Your phone's 4G/5G data on your PC, over one USB cable.</text>
+  <text x="234" y="270" font-family="Segoe UI, Inter, Helvetica, Arial, sans-serif" font-size="24" fill="#8A93A6">Built for low-ping gaming. Free and open source.</text>
+</svg>

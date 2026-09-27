@@ -142,9 +142,9 @@ sealed class Tunnel(Action<string> log)
         try
         {
             using var c = new TcpClient();
-            if (!c.ConnectAsync(host, port).Wait(800)) return false;
+            if (!c.ConnectAsync(host, port).Wait(1500)) return false;
             var s = c.GetStream();
-            s.ReadTimeout = 800;
+            s.ReadTimeout = 1500;
             s.Write([5, 1, 0]);
             var buf = new byte[2];
             return s.Read(buf) == 2 && buf[0] == 5 && buf[1] == 0;

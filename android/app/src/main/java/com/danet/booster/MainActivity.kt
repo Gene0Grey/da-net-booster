@@ -50,7 +50,7 @@ class MainActivity : Activity() {
     private val graph by lazy { Graph(this) }
     private val metaV by lazy { label(12f, Palette.TEXT2) }
 
-    private var lastUp = 0L
+    private var lastUp = -1L // -1 = no baseline yet (first tick after the screen opens)
     private var lastDown = 0L
 
     private val tick = object : Runnable {
@@ -252,6 +252,7 @@ class MainActivity : Activity() {
 
         val u = Stats.up.get()
         val d = Stats.down.get()
+        if (lastUp < 0) { lastUp = u; lastDown = d; return } // no giant spike from bytes counted before the screen opened
         val du = (u - lastUp).coerceAtLeast(0)
         val dd = (d - lastDown).coerceAtLeast(0)
         lastUp = u; lastDown = d

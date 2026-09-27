@@ -25,11 +25,13 @@ sealed class PhoneAppDialog : Form
 
         var link = new TextBox
         {
-            Text = url, ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = Theme.Bg, ForeColor = Theme.Text2,
+            // The QR carries the direct APK link; for typing, show the short releases page instead.
+            Text = url.Replace("https://", "").Replace("/download/DaNetBooster.apk", ""), ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = Theme.Bg, ForeColor = Theme.Text2,
             Font = new Font("Segoe UI", 8.5f), TextAlign = HorizontalAlignment.Center,
             Bounds = new Rectangle(S(20), S(392), S(300), S(20)),
         };
         Controls.Add(link);
+        Shown += (_, _) => { ActiveControl = null; link.SelectionLength = 0; };
     }
 
     int S(int v) => v * DeviceDpi / 96;
