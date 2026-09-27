@@ -44,6 +44,15 @@ class MainActivity : Activity() {
     private val tickPlug by lazy { Tick(this) }
     private val tickBattery by lazy { Tick(this) }
     private val fixBattery by lazy { button("Fix") { askBatteryExemption() } }
+    // Shown while sharing: the checklist is hidden then, and this is the #1 cause of the PC losing the phone.
+    private val pauseWarning by lazy {
+        LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, px(12), 0, 0)
+            addView(label(13f, Palette.WARN, text = "Sharing will pause when the screen turns off. Allow background running."), LayoutParams(0, -2, 1f))
+            addView(button("Fix") { askBatteryExemption() }, LayoutParams(-2, px(40)).apply { marginStart = px(12) })
+        }
+    }
 
     private val live by lazy { card() }
     private val rateV by lazy { label(14f) }
@@ -161,6 +170,7 @@ class MainActivity : Activity() {
         addView(rateV)
         addView(graph, LayoutParams(-1, px(56)).apply { topMargin = px(12); bottomMargin = px(12) })
         addView(metaV)
+        addView(pauseWarning)
     }
 
     private fun card() = LinearLayout(this).apply {
@@ -237,6 +247,8 @@ class MainActivity : Activity() {
 
         // The checklist stays up while sharing if USB tethering is off: the PC can't reach us without it.
         val tether = Tether.active
+        val exempt = getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
+        pauseWarning.visibility = if (exempt) View.GONE else View.VISIBLE
         checklist.visibility = if (on && tether) View.GONE else View.VISIBLE
         live.visibility = if (on) View.VISIBLE else View.GONE
         if (!on || !tether) {
@@ -244,7 +256,6 @@ class MainActivity : Activity() {
             fixTether.visibility = if (tether) View.GONE else View.VISIBLE
             val plug = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0)
             tickPlug.done = plug == BatteryManager.BATTERY_PLUGGED_USB
-            val exempt = getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
             tickBattery.done = exempt
             fixBattery.visibility = if (exempt) View.GONE else View.VISIBLE
             if (!on) return
@@ -262,7 +273,6 @@ class MainActivity : Activity() {
         metaV.text = "${if (n == 1) "1 connection" else "$n connections"} · ${Fmt.bytes(u + d)} · ${Fmt.clock(System.currentTimeMillis() - Stats.startedAt)}"
     }
 
-    @SuppressLint("BatteryLife") // sideloaded tether app; being killed mid-game is the bigger problem
     /** Android has no public action for the tethering screen; try the usual component, then fall back. */
     private fun openTetherSettings() {
         val tries = listOf(
@@ -273,8 +283,19 @@ class MainActivity : Activity() {
         for (i in tries) if (runCatching { startActivity(i) }.isSuccess) return
     }
 
+    /**
+     * The direct "allow?" prompt first. Some OEM builds (vivo among them) block or reroute it to their own background
+     * setting, which is NOT the exemption their power manager checks; fall back to Android's own exemption list,
+     * then to the app's settings page.
+     */
+    @SuppressLint("BatteryLife") // sideloaded tether app; being paused mid-game is the bigger problem
     private fun askBatteryExemption() {
-        startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
+        val tries = listOf(
+            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")),
+            Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")),
+        )
+        for (i in tries) if (i.resolveActivity(packageManager) != null && runCatching { startActivity(i) }.isSuccess) return
     }
 
     companion object {

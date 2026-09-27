@@ -144,20 +144,20 @@ sealed class MainForm : Form
     /// </summary>
     async Task<bool> EnsureHelper()
     {
-        var version = await Task.Run(Helper.Version);
-        if (version == Updater.Version) return true;
-        var first = version == null;
+        var rev = await Task.Run(Helper.InstalledRevision);
+        if (rev >= Helper.Revision) return true;
+        var first = rev == null;
         var text = first
             ? "Da Net Booster uses a small helper to create its network adapter, so the app itself never needs admin.\n\nWindows will ask for permission once to install it."
-            : $"The helper needs updating to {Updater.Version} (installed: {version}).\n\nWindows will ask for permission once.";
+            : "This update includes a new version of the helper.\n\nWindows will ask for permission once.";
         if (MessageBox.Show(this, text, first ? "One-time setup" : "Update the helper", MessageBoxButtons.OKCancel,
                 MessageBoxIcon.Information) != DialogResult.OK)
             return false;
         Log(first ? "Installing the helper..." : "Updating the helper...");
         var ok = await Task.Run(() => Helper.RunElevated("--install-service", TimeSpan.FromMinutes(2)));
-        version = await Task.Run(Helper.Version);
-        Log(ok && version != null ? $"Helper {version} ready." : "Helper install failed or was cancelled.");
-        return ok && version != null;
+        rev = await Task.Run(Helper.InstalledRevision);
+        Log(ok && rev != null ? $"Helper r{rev} ready." : "Helper install failed or was cancelled.");
+        return ok && rev >= Helper.Revision;
     }
 
     async Task Toggle()
@@ -296,6 +296,10 @@ sealed class MainForm : Form
                 dash.Level = phone.Wifi ? 0 : phone.Level;
                 var n = phone.Tcp + phone.Udp;
                 dash.Conns = n == 1 ? "1 connection" : $"{n} connections";
+                // Seen live: without the exemption, vivo pauses the phone app ~15 s after its screen turns off.
+                (dash.DeviceLine, dash.DeviceColor) = phone.Exempt == false
+                    ? ("Phone may pause when its screen is off · tap Fix in the phone app", Theme.Warn)
+                    : (tunnel.Mode == Tunnel.Link.Tether ? "USB tethering · Connected" : "USB debugging · Connected", Theme.Text2);
             }
             dash.Uptime = (DateTime.Now - since).ToString(@"hh\:mm\:ss");
             dash.Invalidate();
@@ -326,7 +330,7 @@ sealed class MainForm : Form
                 misses = health == Tunnel.Health.Gone ? misses + 1 : 0;
                 notSharing = health == Tunnel.Health.NotSharing ? notSharing + 1 : 0;
                 // The tunnel recovers by itself once the phone app answers again; meanwhile say what's wrong.
-                phoneWarning = notSharing >= 3 ? "Phone app isn't answering. Open it and tap Start sharing" : null;
+                phoneWarning = notSharing >= 3 ? "Phone app isn't answering. Screen off? Allow it to run in background" : null;
                 if (health == Tunnel.Health.Moved)
                 {
                     // Re-plugging the cable gives the phone a new address; the old tunnel would be connected to nothing.

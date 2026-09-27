@@ -24,6 +24,11 @@ namespace DaNetBooster;
 static class Helper
 {
     public const string ServiceName = "DaNetBooster";
+    /// <summary>
+    /// Bump only when Helper/TunnelCore behaviour changes. App-only releases then update without an admin prompt.
+    /// Helpers from before this existed (1.3.3) report no revision and are revision 1.
+    /// </summary>
+    public const int Revision = 1;
     const string PipeName = "DaNetBooster.Helper";
     public static string InstallDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "DaNetBooster");
 
@@ -61,6 +66,7 @@ static class Helper
                     PipeOptions.Asynchronous, 4096, 4096, PipeAcl());
                 await pipe.WaitForConnectionAsync(ct);
                 try { await Session(pipe, ct); }
+                catch (IOException) { } // the app closed its end (normal): not an error worth logging
                 finally { core.Stop(); } // the app went away (closed, crashed): never leave the tunnel up without it
             }
             catch (OperationCanceledException) { break; }
@@ -93,7 +99,7 @@ static class Helper
         switch (parts[0])
         {
             case "HELLO":
-                return "OK " + Updater.Version;
+                return $"OK {Updater.Version} r{Revision}";
             case "STATUS":
                 return core!.Running ? "OK running" : "OK stopped";
             case "DISCONNECT":
@@ -223,7 +229,16 @@ static class Helper
 
     // ---------------------------------------------------------------- app side
 
-    /// <summary>The helper's version, or null when it isn't installed/running. Only call while not connected.</summary>
+    /// <summary>Helper revision (see <see cref="Revision"/>), or null when it isn't installed/running.</summary>
+    public static int? InstalledRevision()
+    {
+        var hello = Version();
+        if (hello == null) return null;
+        var r = hello.Split(' ').FirstOrDefault(p => p.StartsWith('r') && int.TryParse(p[1..], out _));
+        return r == null ? 1 : int.Parse(r[1..]);
+    }
+
+    /// <summary>The helper's HELLO reply ("1.3.4 r1"), or null when it isn't installed/running. Only call while not connected.</summary>
     public static string? Version()
     {
         try

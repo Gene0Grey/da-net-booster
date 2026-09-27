@@ -38,7 +38,9 @@ object Radio {
     /** One-line JSON the desktop app polls through `adb forward tcp:1081 tcp:8001`. */
     fun json(ctx: Context): String {
         val r = read(ctx)
+        // Without this exemption vivo (and other OEMs) pause the app ~15 s after the screen turns off, sharing or not.
+        val exempt = ctx.getSystemService(android.os.PowerManager::class.java).isIgnoringBatteryOptimizations(ctx.packageName)
         return """{"up":${Stats.up.get()},"down":${Stats.down.get()},"tcp":${Stats.tcp.get()},"udp":${Stats.udp.get()},""" +
-            """"net":"${r.net}","dbm":${r.dbm ?: "null"},"level":${r.level},"wifi":${r.onWifi}}"""
+            """"net":"${r.net}","dbm":${r.dbm ?: "null"},"level":${r.level},"wifi":${r.onWifi},"exempt":$exempt}"""
     }
 }

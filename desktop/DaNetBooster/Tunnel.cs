@@ -148,7 +148,8 @@ sealed class Tunnel
         return null;
     }
 
-    public sealed record PhoneStats(long Up, long Down, int Tcp, int Udp, string Net, int? Dbm, int Level, bool Wifi);
+    /// <summary>Exempt: phone app is exempt from battery optimisation (null = older phone app that doesn't say).</summary>
+    public sealed record PhoneStats(long Up, long Down, int Tcp, int Udp, string Net, int? Dbm, int Level, bool Wifi, bool? Exempt);
     static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
 
     /// <summary>Counters + radio info from the phone app's stats port.</summary>
